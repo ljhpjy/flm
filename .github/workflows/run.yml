@@ -1,20 +1,28 @@
-name: FLM Manual Run
+name: FLM Auto Renew
 
 on:
+  schedule:
+    # 每小时整点（UTC）
+    - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
       mode:
         description: '运行模式'
-        required: true
+        required: false
         default: 'auto'
         type: choice
         options:
-          - auto      # 按 state 判断
-          - force     # 强制注册新号
-          - info      # 只看状态
+          - auto
+          - force
+          - refresh
+          - info
 
 permissions:
   contents: write
+
+concurrency:
+  group: flm-auto
+  cancel-in-progress: false
 
 jobs:
   run:
@@ -26,57 +34,57 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Fetch core script from private gist
+      - name: Fetch core from private gist
         env:
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
           GIST_RAW_URL: ${{ secrets.GIST_RAW_URL }}
         run: |
           set -e
           curl -sfL -H "Authorization: token $GIST_TOKEN" "$GIST_RAW_URL" -o flm_core.py
-          echo "--- 脚本前 5 行 ---"
-          head -5 flm_core.py
-          echo "--- 行数: $(wc -l < flm_core.py) ---"
+          echo "脚本行数: $(wc -l < flm_core.py)"
 
       - name: Run
         env:
           PYTHONIOENCODING: utf-8
-          FLM_REFRESH_BEFORE: '600'
+          FLM_WINDOW: '60'
         run: |
           MODE="${{ github.event.inputs.mode }}"
-          echo "模式: $MODE"
-          if [ "$MODE" = "force" ]; then
-            python3 flm_core.py --force
-          elif [ "$MODE" = "info" ]; then
-            python3 flm_core.py --info
-          else
-            python3 flm_core.py
-          fi
+          if [ -z "$MODE" ]; then MODE="auto"; fi
+          echo "==== 模式: $MODE ===="
+          python3 flm_core.py --"$MODE"
 
-      - name: Show result
+      - name: Show state
         if: always()
         run: |
-          echo "=== 文件列表 ==="
-          ls -la sub.txt state.json accounts.json 2>/dev/null || echo "（部分文件不存在）"
+          echo "==== 文件 ===="
+          ls -la sub.txt expire_at.txt 2>/dev/null || echo "(缺文件)"
           echo ""
-          if [ -f state.json ]; then
-            echo "=== state.json ==="
-            cat state.json
+          echo "==== expire_at.txt ===="
+          cat expire_at.txt 2>/dev/null || echo "(无)"
+          echo ""
+          if [ -f expire_at.txt ]; then
+            EXP=$(cat expire_at.txt)
+            NOW=$(date +%s)
+            echo "now       = $NOW"
+            echo "expire_at = $EXP"
+            echo "diff      = $((NOW - EXP))"
+            if [ "$EXP" != "0" ]; then
+              echo "到期时间   = $(date -u -d @$EXP '+%F %H:%M:%S UTC')"
+            fi
           fi
           echo ""
-          if [ -f sub.txt ]; then
-            echo "=== sub.txt 前 100 字节 ==="
-            head -c 100 sub.txt; echo
-          fi
+          echo "==== sub.txt 大小 ===="
+          wc -c sub.txt 2>/dev/null || echo "(无)"
 
       - name: Commit
         run: |
           git config user.name  "flm-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add sub.txt state.json accounts.json 2>/dev/null || true
+          git add sub.txt expire_at.txt
           if git diff --staged --quiet; then
             echo "无变化，不提交"
           else
-            git commit -q -m "run: $(date -u '+%F %H:%M UTC') [${{ github.event.inputs.mode }}]"
+            git commit -q -m "auto: $(date -u '+%F %H:%M UTC')"
             git push -q
             echo "已推送"
           fi
