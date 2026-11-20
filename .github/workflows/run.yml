@@ -43,7 +43,6 @@ jobs:
           echo "脚本行数: $(wc -l < flm_core.py)"
 
       - name: Run
-        id: run
         continue-on-error: true
         env:
           PYTHONIOENCODING: utf-8
@@ -53,35 +52,33 @@ jobs:
           if [ -z "$MODE" ]; then MODE="auto"; fi
           echo "==== 模式: $MODE ===="
           python3 flm_core.py --"$MODE"
-          echo "---- exit code: $? ----"
+          echo "==== exit: $? ===="
 
       - name: Show state
         if: always()
         run: |
+          echo "==== 工作目录 ===="
+          pwd
+          echo ""
           echo "==== 文件列表 ===="
-          ls -la sub.txt expire_at.txt 2>/dev/null || echo "(未生成任何输出文件)"
+          ls -la | grep -E 'sub\.txt|expire_at\.txt|sub_url\.txt' || echo "(无相关文件)"
           echo ""
           echo "==== expire_at.txt ===="
           if [ -f expire_at.txt ]; then
             EXP=$(cat expire_at.txt)
             NOW=$(date +%s)
-            echo "expire_at = $EXP"
-            echo "now       = $NOW"
-            echo "diff      = $((NOW - EXP))"
-            if [ "$EXP" != "0" ]; then
-              echo "到期时间   = $(date -u -d @$EXP '+%F %H:%M:%S UTC')"
-            fi
+            echo "内容 = ${EXP:-（空）}"
+            echo "now  = $NOW"
+            [ -n "$EXP" ] && [ "$EXP" != "0" ] && echo "到期 = $(date -u -d @$EXP '+%F %H:%M:%S UTC')"
           else
-            echo "(不存在)"
+            echo "(文件不存在)"
           fi
           echo ""
           echo "==== sub.txt ===="
           if [ -f sub.txt ]; then
-            echo "大小: $(wc -c < sub.txt) 字节"
-            echo "前 80 字节:"
-            head -c 80 sub.txt; echo
+            echo "大小 = $(wc -c < sub.txt) 字节"
           else
-            echo "(不存在)"
+            echo "(文件不存在)"
           fi
 
       - name: Commit
@@ -91,25 +88,18 @@ jobs:
           git config user.name  "flm-bot"
           git config user.email "bot@users.noreply.github.com"
 
-          # 只添加「确实存在」的文件
           ADDED=0
           for f in sub.txt expire_at.txt; do
-            if [ -f "$f" ]; then
-              git add "$f"
-              ADDED=$((ADDED + 1))
-              echo "已加入暂存: $f"
-            else
-              echo "跳过（不存在）: $f"
-            fi
+            if [ -f "$f" ]; then git add "$f"; ADDED=$((ADDED+1)); echo "add: $f"; else echo "skip: $f (不存在)"; fi
           done
 
           if [ "$ADDED" -eq 0 ]; then
-            echo "⚠ 本次没有生成任何输出文件（info 模式或脚本未成功）"
+            echo "⚠ 无输出文件，跳过提交"
             exit 0
           fi
 
           if git diff --staged --quiet; then
-            echo "内容无变化，不提交"
+            echo "内容无变化"
           else
             git commit -q -m "auto: $(date -u '+%F %H:%M UTC')"
             git push -q && echo "✓ 已推送"
